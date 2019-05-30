@@ -1,0 +1,459 @@
+#include <Adafruit_Fingerprint.h>
+#include <SPI.h>
+#include <Ethernet.h>
+#include <LiquidCrystal_I2C.h>  // Librería para controlar el LCD
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+#include <DS3231.h>
+#define RED_LED 6
+#define GREEN_LED 5
+#define BLUE_LED 4
+
+// Init the DS3231 using the hardware interface
+DS3231  rtc(SDA, SCL);
+
+//MEDIR VOLTAJE EN PORCENTAJE
+
+const int LDRPin = A0;
+const int LDRPin1 = A1;
+const int threshold = 2;
+const int threshold1 = 2;
+
+int porcentaje;
+int porcentaje1;
+int porcentaje100=0;
+int porcentaje0=0;
+
+
+unsigned long milisegundo = 0;
+int buzzer=7;
+byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED}; 
+byte ip[] = {192, 168, 70, 114};                       // Dirección IP estática (Shield Ethernet)
+byte server[] = {192, 168, 70, 13};                   // Dirección IP Servidor (API)
+EthernetClient client; 
+
+// On Leonardo/Micro or others with hardware serial, use those! #0 is green wire, #1 is white
+// uncomment this line:
+// #define mySerial Serial1
+
+// For UNO and others without hardware serial, we must use software serial...
+// pin #2 is IN from sensor (GREEN wire)
+// pin #3 is OUT from arduino  (WHITE wire)
+// comment these two lines if using hardware serial
+SoftwareSerial mySerial(2,3);
+
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+void setup()  
+{
+//rgb
+pinMode(RED_LED, OUTPUT);  
+pinMode(GREEN_LED, OUTPUT);  
+pinMode(BLUE_LED, OUTPUT);
+ analogWrite(RED_LED, 255);
+    analogWrite(GREEN_LED, 255);
+    analogWrite(BLUE_LED, 255);
+  //LDR
+  
+   pinMode(LDRPin, INPUT);
+     pinMode(LDRPin1, INPUT);
+   //BUZZER
+  pinMode(7,OUTPUT);
+  digitalWrite(7, LOW);
+   SPI.begin();  
+  Serial.begin(9600);
+  while (!Serial);  // For Yun/Leo/Micro/Zero/...
+  delay(100);
+ 
+  // set the data rate for the sensor serial port
+  finger.begin(57600);
+  
+  if (finger.verifyPassword()) {
+    Serial.println("SENSOR DE HUELLA ACTIVADO!");
+  } else {
+    Serial.println("SENSOR DE HUELLA DESACTIVADO");
+    while (1) { delay(1); }
+  }
+
+  finger.getTemplateCount();
+  Serial.print("Sensor contains "); Serial.print(finger.templateCount); //Serial.println(" templates");
+  //Serial.println("coloque su dedo en el sensor...");
+ 
+  lcd.init();                           // Inicializando LCD (16x2)
+  lcd.backlight();                        
+  lcd.clear();
+   rtc.begin();
+
+   
+  //Inicializar Ethernet con la MAC e IP definidas
+  Ethernet.begin(mac, ip);
+inicio();
+
+
+}
+
+void loop()                     
+{
+  
+   milisegundo++;
+Serial.println(milisegundo);
+  if(milisegundo==20)
+  inicio();
+
+  reloj();
+  
+int resultado= getFingerprintIDez();
+if(resultado>-1)
+{
+    Serial.println(resultado);
+    Serial.println("el resulado el que voy enviar por el shiel ethernet");
+   make_request("huella",String(resultado));
+   
+  }
+voltaje();
+}
+
+
+  
+
+
+uint8_t getFingerprintID() {
+  uint8_t p = finger.getImage(); 
+  Serial.print(p);
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("Image taken");
+      break;
+    case FINGERPRINT_NOFINGER:
+      Serial.println("No finger detected");
+      return p;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return p;
+    case FINGERPRINT_IMAGEFAIL:
+      Serial.println("Imaging error");
+      return p;
+    default:
+      Serial.println("Unknown error");
+      return p;
+  }
+ 
+  // OK success!
+
+  p = finger.image2Tz();
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("Image converted");
+      break;
+    case FINGERPRINT_IMAGEMESS:
+      Serial.println("Image too messy");
+      return p;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return p;
+    case FINGERPRINT_FEATUREFAIL:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    case FINGERPRINT_INVALIDIMAGE:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    default:
+      Serial.println("Unknown error");
+      return p;
+       
+  }
+ 
+  // OK converted!
+  p = finger.fingerFastSearch();
+  if (p == FINGERPRINT_OK) {
+    Serial.println("Found a print match!");
+  } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+    Serial.println("Communication error");
+    return p;
+  } else if (p == FINGERPRINT_NOTFOUND) {
+    Serial.println("Did not find a match");
+    return p;
+  } else {
+    Serial.println("Unknown error");
+    return p;
+  }   
+  
+  // found a match!
+  Serial.print("Found ID #"); Serial.print(finger.fingerID); 
+  Serial.print(" with confidence of "); Serial.println(finger.confidence); 
+
+  return finger.fingerID;
+}
+
+// returns -1 if failed, otherwise returns ID #
+int getFingerprintIDez() {
+  uint8_t p = finger.getImage();
+  if (p != FINGERPRINT_OK)  return -1;
+  Serial.println("COCO");
+  milisegundo=0;
+ 
+ 
+
+  p = finger.image2Tz();
+  if (p != FINGERPRINT_OK)  return -1;
+
+  p = finger.fingerFastSearch();
+  if (p != FINGERPRINT_OK)  {
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("HUELLA NO REGISTRADA");
+    analogWrite(RED_LED, 0);
+    analogWrite(GREEN_LED, 255);
+    analogWrite(BLUE_LED, 255);
+
+    digitalWrite(7,HIGH);
+    delay(100);
+   digitalWrite(7,LOW);
+    delay(100);
+    digitalWrite(7,HIGH);
+    delay(100);
+    digitalWrite(7,LOW);
+       analogWrite(RED_LED, 255);
+    analogWrite(GREEN_LED, 255);
+    analogWrite(BLUE_LED, 255);
+
+    reloj();
+  
+    return -1;}
+    lcd.clear();
+    lcd.setCursor(0,0);
+lcd.print( "BUSCANDO USUARIO... ");
+  digitalWrite(7,HIGH); 
+  delay(100);
+   digitalWrite(7,LOW); 
+reloj();
+
+
+
+
+
+
+
+ //if(finger.fingerID=FINGERPRINT_NOFINGER)
+ //{
+   //   Serial.println("No finger detected");
+ //}
+  //
+ //Serial.print("Found ID #"); Serial.print(finger.fingerID); 
+  //Serial.print(" with confidence of "); Serial.println(finger.confidence);
+  //Serial.print(" BIENVENIDO");
+  return finger.fingerID; 
+  
+}
+void reloj()
+{
+
+ lcd.setCursor(12,3);
+ lcd.print(rtc.getTimeStr());
+  
+  // Send date
+  lcd.setCursor(0,3);
+ lcd.print(rtc.getDateStr());
+  //lcd.print(" -- ");
+
+  
+  delay (1000);
+}
+
+void inicio()
+{
+    lcd.setCursor(0,0);
+   lcd.print("     I.E.P CIMA        ");
+   lcd.setCursor(0,1);
+    lcd.print("ASISTENCIA  PERSONAL");
+    //lcd.setCursor(0,2);
+    //lcd.print("  HUELLA  DACTILAR  ");
+}
+
+
+
+
+void make_request(String clave, String id){
+  String postData = clave + "=" + id +"&rastreo=LECTOR_DE_HUELLAS";
+  if (client.connect(server,3000)){
+    client.println("POST /api/cimapersonal/asistencia/personal HTTP/1.1");
+    client.println("Host: 192.168.70.105");
+    client.println("Cache-Control: no-cache");
+    client.println("Content-Type: application/x-www-form-urlencoded");
+    client.print("Content-Length: ");
+    client.println(postData.length());
+    client.println();
+    client.println(postData);
+
+    if (client.println() == 0) {
+      return;
+    }
+
+    //Verificar Estado HTTP
+    char status[32] = {0};
+    client.readBytesUntil('\r', status, sizeof(status));
+    if (strcmp(status, "HTTP/1.1 200 OK") != 0) {
+      //emit_led(2);
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("ERROR!");
+      lcd.setCursor(0, 1);
+      lcd.print("INTENTE OTRA VEZ");
+      return;
+    }
+
+    //Omitir encabezados HTTP
+    char endOfHeaders[] = "\r\n\r\n";
+    if (!client.find(endOfHeaders)) {
+      return;
+    }
+    String response = "";
+    
+    while (client.available())
+    {
+      char c = client.read();
+      response = response + c;
+      // Serial.print(c);
+    }
+
+   
+
+    //conectado = true;
+    if (clave == "codigos") {
+      //SD.remove("DATA.TXT");
+   //   codigos="";   
+      
+    }else{
+     
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(getValue(response, '-', 0));
+      lcd.setCursor(0, 1);
+      lcd.print(getValue(response, '-', 1));
+        analogWrite(RED_LED, 255);
+    analogWrite(GREEN_LED, 0);
+    analogWrite(BLUE_LED, 255);
+       digitalWrite(7,HIGH);
+    delay(200);
+     digitalWrite(7,LOW);  
+      analogWrite(RED_LED, 255);
+    analogWrite(GREEN_LED, 255);
+    analogWrite(BLUE_LED, 255);
+    }
+
+    client.stop();
+  }else{
+      //conectado=false;
+     //if(clave=="codigo"){
+       // save_to_SD(id);
+        //lcd.clear();
+      
+       // lcd.setCursor(0, 0);
+       // lcd.clear();
+       lcd.clear();
+       lcd.setCursor(0,0);
+       lcd.print("SIN ACCESO A LA RED");
+       lcd.setCursor(0,1);
+       lcd.print("INTENTE OTRA VEZ");
+       analogWrite(RED_LED, 255);
+    analogWrite(GREEN_LED, 255);
+    analogWrite(BLUE_LED, 0);
+  delay(500);
+       analogWrite(RED_LED, 255);
+    analogWrite(GREEN_LED, 255);
+    analogWrite(BLUE_LED, 255); 
+       
+      //}     
+  }
+}
+String getValue(String data, char separator, uint8_t index){
+  int found = 0;
+  int strIndex[] = {0, -1};
+  int maxIndex = data.length() - 1;
+
+  for (int i = 0; i <= maxIndex && found <= index; i++)
+  {
+    if (data.charAt(i) == separator || i == maxIndex)
+    {
+      found++;
+      strIndex[0] = strIndex[1] + 1;
+      strIndex[1] = (i == maxIndex) ? i + 1 : i;
+    }
+  }
+
+  return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
+ void voltaje()
+ {
+  int input = analogRead(LDRPin);
+  int input1 = analogRead(LDRPin1);
+   if (input > threshold && porcentaje100==0 ) {
+porcentaje1=100;
+porcentaje100=1;
+//porcentaje0=0;
+Serial.print("El porcentaje1 es:");
+     Serial.println(porcentaje1);
+      delay(1000);
+       Serial.print("ENVIANDO:");
+        Serial.println(porcentaje100);
+      medir_voltaje("porcentaje",String(porcentaje1));
+   }
+  
+  if (input <= threshold && porcentaje100==1 ) {
+
+porcentaje100=0;
+//porcentaje0=0;
+     // Serial.println(porcentaje);
+      delay(1000);
+          Serial.println(porcentaje100);
+     // medir_voltaje("porcentaje",String(porcentaje1));
+    
+   }
+
+   if(input1 > threshold1 && porcentaje0==0)
+  {
+    
+      porcentaje=0;
+      //porcentaje100=0;
+porcentaje0=1;
+     Serial.print("El porcentaje es:");
+      Serial.println(porcentaje);
+      delay(1000);
+      Serial.print("ENVIANDO:");
+         Serial.println(porcentaje0);
+      medir_voltaje("porcentaje",String(porcentaje));
+   }
+ if(input1 <= threshold1 && porcentaje0==1)
+  {
+    
+     // porcentaje=0;
+      //porcentaje100=0;
+porcentaje0=0;
+     // Serial.println(porcentaje);
+      delay(1000);
+      
+         Serial.println(porcentaje0);
+         
+   //   medir_voltaje("porcentaje",String(porcentaje));
+  
+}
+
+
+ }
+void medir_voltaje(String clave, String id){
+  String postData = clave + "=" + id +"&rastreo=LECTOR_DE_HUELLAS";
+  if (client.connect(server,3000)){
+    client.println("POST /api/cimapersonal/bateria HTTP/1.1");
+    client.println("Host: 192.168.70.105");
+    client.println("Cache-Control: no-cache");
+    client.println("Content-Type: application/x-www-form-urlencoded");
+    client.print("Content-Length: ");
+    client.println(postData.length());
+    client.println();
+    client.println(postData);
+
+    if (client.println() == 0) {
+      return;
+    }
+  
+  }
+}
